@@ -1,0 +1,30 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT    = _{ "//" ~ (!("\n") ~ ANY)* }
+
+program       = _{ SOI ~ contract_def ~ EOI }
+
+contract_def  =  { "contract" ~ ident ~ "{" ~ fn_def ~ "}" }
+fn_def        =  { "fn" ~ ident ~ "(" ~ param_list? ~ ")" ~ "->" ~ ident ~ "{" ~ block_stmt* ~ "}" }
+
+param_list    =  { param ~ ("," ~ param)* }
+param         =  { ident ~ ":" ~ type_modifier? ~ ident }
+type_modifier =  { "*sustain" }
+
+block_stmt    = _{ gas_block | ledger_decl | atomic_block | assign_stmt | return_stmt | let_stmt }
+
+gas_block     =  { "gas" ~ "(" ~ expr ~ ")" ~ "{" ~ block_stmt* ~ "}" }
+atomic_block  =  { "atomic" ~ "{" ~ block_stmt* ~ "}" }
+ledger_decl   =  { "ledger" ~ ident ~ ":" ~ ident ~ "=" ~ ledger_id ~ ";" }
+
+let_stmt      =  { "let" ~ ident ~ "=" ~ expr_call ~ ";" }
+assign_stmt   =  { ident ~ "=" ~ expr_call ~ ";" }
+return_stmt   =  { "return" ~ ident ~ ";" }
+
+expr_call     = _{ load_expr | deposit_expr | ident | number }
+load_expr     =  { "load.s" ~ "(" ~ ident ~ ")" }
+deposit_expr  =  { "txdeposit" ~ "(" ~ ident ~ "," ~ ident ~ ")" }
+
+ledger_id     =  { "b" ~ ASCII_DIGIT }
+ident         =  { ASCII_ALPHA ~ ASCII_ALPHANUMERIC* }
+number        =  { ASCII_DIGIT+ }
+expr          =  { ASCII_ALPHANUMERIC+ }
