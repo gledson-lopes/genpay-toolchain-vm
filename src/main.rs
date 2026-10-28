@@ -6,71 +6,12 @@ use std::fs;
 mod codegen;
 mod parser;
 mod verifier;
+mod vm;
 
 use codegen::CodeGenerator;
 use parser::parse_contract;
 use verifier::GenpayVerifier;
-
-pub struct GenpayVM {
-    pub memory: Vec<u8>,
-    pub registers: [i64; 32],
-    pub pc: usize,
-    pub gas_counter: u64,
-    pub ledgers: [i64; 4],
-}
-
-impl GenpayVM {
-    pub fn new(memory_size: usize) -> Self {
-        let mut vm = Self {
-            memory: vec![0; memory_size],
-            registers: [0; 32],
-            pc: 0,
-            gas_counter: 1000,
-            ledgers: [0; 4],
-        };
-        vm.registers[1] = 1200; // Deposit amount parameter
-        vm
-    }
-
-    pub fn run_from(&mut self, start_pc: usize) -> Result<i64, String> {
-        self.pc = start_pc;
-        println!(
-            "[VM Runtime] Starting Genpay ISA execution from PC: 0x{:04X}",
-            self.pc
-        );
-
-        loop {
-            if self.gas_counter == 0 {
-                return Err("Out of gas (g0)".into());
-            }
-            self.gas_counter -= 1;
-
-            if self.pc + 4 > self.memory.len() {
-                return Err("Segmentation fault: PC out of bounds".into());
-            }
-
-            let inst_bytes = &self.memory[self.pc..self.pc + 4];
-            let opcode_word = u32::from_le_bytes(inst_bytes.try_into().unwrap());
-            let opcode = ((opcode_word >> 24) & 0xFF) as u8;
-
-            match opcode {
-                0x00 => {
-                    self.ledgers[0] = self.registers[1];
-                    break;
-                }
-                _ => {
-                    self.pc += 4;
-                    if self.pc >= start_pc + 8 {
-                        self.ledgers[0] = self.registers[1];
-                        break;
-                    }
-                }
-            }
-        }
-
-        Ok(self.ledgers[0])
-    }
-}
+use vm::GenpayVM;
 
 const GREEN: &str = "\x1b[32m";
 const BOLD: &str = "\x1b[1m";
@@ -212,7 +153,7 @@ fn main() {
     codegen.compile_ast(&ast);
     println!("Successfully emitted Genpay object file to \"contract.o\"");
 
-    println!("\n[3/3] Executing Contract on Genpay VM Runtime...");
+    println!("[3/3] Executing Contract on Genpay Secure VM Runtime...");
     let file_data = fs::read("contract.o").expect("Failed to read contract.o");
     let elf_file = object::File::parse(&*file_data).expect("Failed to parse ELF object");
 
@@ -226,20 +167,22 @@ fn main() {
     );
 
     let mut vm = GenpayVM::new(4096);
+    vm.set_gas(1000);
+
     let load_addr = 0x0000;
     vm.memory[load_addr..load_addr + text_bytes.len()].copy_from_slice(text_bytes);
 
-    match vm.run_from(load_addr) {
+    match vm.run_from(load_addr, text_bytes.len()) {
         Ok(balance) => {
             println!(
-                "✔ VM Execution Successful! Dynamic Vault Balance: {}",
-                balance
+                "\n{}✔ VM Execution Successful! Final Vault Balance: {}{}",
+                GREEN, balance, RESET
             );
             println!("Remaining Gas (g0): {}", vm.gas_counter);
         }
         Err(e) => {
             eprintln!("❌ VM Execution Error: {}", e);
+            std::process::exit(1);
         }
     }
 }
-
