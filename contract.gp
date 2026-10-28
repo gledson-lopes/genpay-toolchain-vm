@@ -5,8 +5,8 @@ contract EscrowVault {
             atomic {
                 let current_balance = load.s(wallet_ptr);
                 if (amount <= current_balance) {
-            vault = txdeposit(wallet_ptr, amount);
-        }
+                    vault = txdeposit(wallet_ptr, amount);
+                }
             }
             return vault;
         }

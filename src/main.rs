@@ -89,20 +89,12 @@ fn main() {
         "contract.gp"
     };
 
+    // Strict file reading: crashes with an explicit error if the file doesn't exist
     let mut source_code = fs::read_to_string(file_path).unwrap_or_else(|_| {
-        r#"contract EscrowVault {
-    fn deposit_funds(wallet_ptr: *sustain i64, amount: i64, limit: i64) -> i64 {
-        gas(limit) {
-            ledger vault: i64 = b0;
-            atomic {
-                let current_balance = load.s(wallet_ptr);
-                vault = txdeposit(wallet_ptr, amount);
-            }
-            return vault;
-        }
-    }
-}"#
-        .to_string()
+        panic!(
+            "Failed to read contract file at '{}'. Please ensure the file exists.",
+            file_path
+        )
     });
 
     println!(
@@ -110,9 +102,9 @@ fn main() {
         file_path
     );
 
-    let target_statement = "vault = txdeposit(wallet_ptr, amount);";
-    let faulty_span = if let Some(idx) = source_code.find(target_statement) {
-        idx..(idx + target_statement.len())
+    let initial_target = "vault = txdeposit(wallet_ptr, amount);";
+    let faulty_span = if let Some(idx) = source_code.find(initial_target) {
+        idx..(idx + initial_target.len())
     } else {
         180..220
     };
@@ -147,14 +139,50 @@ fn main() {
                 GREEN, guidance.counterexample_summary, RESET
             );
 
-            let vulnerable_pattern = &guidance.target_snippet;
-            let safe_replacement = &guidance.replacement_code;
+            let target_statement = &guidance.target_snippet;
+            let raw_replacement = &guidance.replacement_code;
 
-            source_code = source_code.replace(vulnerable_pattern, safe_replacement);
+            // Rebuild the file line-by-line using the target line's exact leading whitespace as anchor
+            let mut new_lines = Vec::new();
+            let mut formatted_replacement_display = String::new();
+
+            for line in source_code.lines() {
+                if line.contains(target_statement) {
+                    let base_indent: String =
+                        line.chars().take_while(|c| c.is_whitespace()).collect();
+
+                    let formatted_replacement = raw_replacement
+                        .lines()
+                        .map(|l| {
+                            let trimmed = l.trim();
+                            if trimmed.is_empty() {
+                                String::new()
+                            } else if trimmed.starts_with('}') {
+                                format!("{}{}", base_indent, trimmed)
+                            } else if l == raw_replacement.lines().next().unwrap_or("") {
+                                format!("{}{}", base_indent, trimmed)
+                            } else {
+                                format!("{}    {}", base_indent, trimmed)
+                            }
+                        })
+                        .collect::<Vec<String>>()
+                        .join("\n");
+
+                    formatted_replacement_display = formatted_replacement.clone();
+
+                    for rep_line in formatted_replacement.lines() {
+                        new_lines.push(rep_line.to_string());
+                    }
+                } else {
+                    new_lines.push(line.to_string());
+                }
+            }
+
+            source_code = new_lines.join("\n");
             fs::write(file_path, &source_code).expect("Failed to write auto-patched contract");
 
-            println!("\n{}✨ [AUTO-REWRITE APPLIED]:{}", GREEN, RESET);
-            println!("{}{}{}\n", GREEN, safe_replacement, RESET);
+            println!("\n{}✨ [AUTO-REWRITE & FORMAT APPLIED]:{}", GREEN, RESET);
+            println!("{}{}{}\n", GREEN, formatted_replacement_display, RESET);
 
             println!("[Re-running Genpay Formal Verification on patched code...]");
             let new_span = if let Some(idx) = source_code.find("vault = txdeposit") {
@@ -214,3 +242,4 @@ fn main() {
         }
     }
 }
+
