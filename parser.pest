@@ -1,0 +1,25 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+contract = { "contract" ~ ident ~ "{" ~ fn_def* ~ "}" }
+fn_def = { "fn" ~ ident ~ "(" ~ parameters? ~ ")" ~ "->" ~ ident ~ "{" ~ block_item* ~ "}" }
+parameters = { param ~ ("," ~ param)* }
+param = { ident ~ ":" ~ type_spec }
+type_spec = { ("*" ~ ident)? ~ ident }
+
+block_item = { gas_block | ledger_decl | atomic_block | let_stmt | assign_stmt | return_stmt | if_stmt }
+gas_block = { "gas" ~ "(" ~ expr ~ ")" ~ "{" ~ block_item* ~ "}" }
+atomic_block = { "atomic" ~ "{" ~ block_item* ~ "}" }
+ledger_decl = { "ledger" ~ ident ~ ":" ~ ident ~ "=" ~ expr ~ ";" }
+let_stmt = { "let" ~ ident ~ "=" ~ expr ~ ";" }
+assign_stmt = { ident ~ "=" ~ expr ~ ";" }
+return_stmt = { "return" ~ expr ~ ";" }
+if_stmt = { "if" ~ "(" ~ condition_expr ~ ")" ~ "{" ~ block_item* ~ "}" }
+
+condition_expr = { ident ~ ("<=" | ">=" | "<" | ">" | "==" | "!=") ~ ident }
+
+expr = { call_expr | number | ident }
+call_expr = { ident ~ ("." ~ ident)? ~ "(" ~ arguments? ~ ")" }
+arguments = { expr ~ ("," ~ expr)* }
+
+number = @{ ASCII_DIGIT+ }
+ident = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }

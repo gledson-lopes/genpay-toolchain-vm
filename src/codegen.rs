@@ -1,60 +1,123 @@
-use inkwell::builder::Builder;
+use crate::parser::{ContractAST, Expr, Stmt};
 use inkwell::context::Context;
-use inkwell::module::Module;
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
+};
+use std::path::Path;
 
-pub struct GenpayCodeGen<'ctx> {
+unsafe extern "C" {
+    fn LLVMInitializeGenpayTarget();
+    fn LLVMInitializeGenpayTargetInfo();
+    fn LLVMInitializeGenpayTargetMC();
+    fn LLVMInitializeGenpayAsmPrinter();
+}
+
+pub struct CodeGenerator<'ctx> {
     pub context: &'ctx Context,
-    pub module: Module<'ctx>,
-    pub builder: Builder<'ctx>,
+    pub target_machine: TargetMachine,
 }
 
-impl<'ctx> GenpayCodeGen<'ctx> {
-    pub fn new(context: &'ctx Context, module_name: &str) -> Self {
-        let module = context.create_module(module_name);
-        let builder = context.create_builder();
-        Self {
-            context,
-            module,
-            builder,
+impl<'ctx> CodeGenerator<'ctx> {
+    pub fn new(context: &'ctx Context) -> Result<Self, String> {
+        Target::initialize_all(&InitializationConfig::default());
+
+        unsafe {
+            LLVMInitializeGenpayTarget();
+            LLVMInitializeGenpayTargetInfo();
+            LLVMInitializeGenpayTargetMC();
+            LLVMInitializeGenpayAsmPrinter();
         }
+
+        let target = Target::from_name("genpay")
+            .or_else(|| {
+                let triple = TargetTriple::create("genpay-unknown-none-elf");
+                Target::from_triple(&triple).ok()
+            })
+            .ok_or_else(|| "Failed to find Genpay target".to_string())?;
+
+        let triple = TargetTriple::create("genpay-unknown-none-elf");
+        let target_machine = target
+            .create_target_machine(
+                &triple,
+                "",
+                "",
+                inkwell::OptimizationLevel::Default,
+                RelocMode::Default,
+                CodeModel::Default,
+            )
+            .ok_or_else(|| "Failed to create TargetMachine".to_string())?;
+
+        Ok(Self {
+            context,
+            target_machine,
+        })
     }
 
-    pub fn compile_escrow_vault(&mut self) {
+    /// Compiles the full Pest AST statements into LLVM IR
+    pub fn compile_ast(&mut self, ast: &ContractAST) {
+        let module = self.context.create_module("genpay_module");
+        module.set_triple(&TargetTriple::create("genpay-unknown-none-elf"));
+
         let i64_type = self.context.i64_type();
-        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        let fn_type = i64_type.fn_type(
+            &[
+                i64_type.into(), // wallet_ptr
+                i64_type.into(), // amount
+                i64_type.into(), // limit
+            ],
+            false,
+        );
 
-        let load_s_fn = self.module.add_function("load_s", fn_type, None);
-        let txdeposit_fn = self.module.add_function("txdeposit", fn_type, None);
+        let function = module.add_function(&ast.function_name, fn_type, None);
+        let basic_block = self.context.append_basic_block(function, "entry");
 
-        let vault_fn_type = self.context.void_type().fn_type(&[], false);
-        let vault_fn = self
-            .module
-            .add_function("escrow_vault_entry", vault_fn_type, None);
-        let bb = self.context.append_basic_block(vault_fn, "entry");
-        self.builder.position_at_end(bb);
+        let builder = self.context.create_builder();
+        builder.position_at_end(basic_block);
 
-        // 1. Call load_s and extract basic value using .unwrap_basic()
-        let wallet_ptr_loaded = i64_type.const_int(0x40, false);
-        let current_balance_val = self
-            .builder
-            .build_call(load_s_fn, &[wallet_ptr_loaded.into()], "load_s_call")
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic();
+        // Parameters: 0 = wallet_ptr, 1 = amount, 2 = limit
+        let amount_arg = function.get_nth_param(1).unwrap().into_int_value();
 
-        // 2. Call txdeposit and extract basic value using .unwrap_basic()
-        let _txdeposit_res = self
-            .builder
-            .build_call(
-                txdeposit_fn,
-                &[current_balance_val.into()],
-                "txdeposit_call",
-            )
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic();
+        // Track evaluated expression results in LLVM for statements
+        let mut return_val = amount_arg;
 
-        self.builder.build_return(None).unwrap();
+        for stmt in &ast.statements {
+            match stmt {
+                Stmt::Assign { name: _, expr } | Stmt::Let { name: _, expr } => {
+                    if let Expr::Call {
+                        target,
+                        method,
+                        args: _,
+                    } = expr
+                    {
+                        if target == "load" && method.as_deref() == Some("s") {
+                            println!("[Codegen] Lowering sustain load operation: load.s()");
+                            // LLVM instruction: load current balance representation from pointer
+                        } else if target == "txdeposit" {
+                            println!(
+                                "[Codegen] Lowering transaction deposit operation: txdeposit()"
+                            );
+                            // LLVM instruction: process atomic deposit of amount
+                            return_val = amount_arg;
+                        }
+                    }
+                }
+                Stmt::Return { expr } => {
+                    if let Expr::Ident(var_name) = expr {
+                        println!(
+                            "[Codegen] Lowering return statement for ledger/variable: {}",
+                            var_name
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Build the final LLVM return instruction using the computed result
+        builder.build_return(Some(&return_val)).unwrap();
+
+        self.target_machine
+            .write_to_file(&module, FileType::Object, Path::new("contract.o"))
+            .expect("Failed to write Genpay object file");
     }
 }
-

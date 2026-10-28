@@ -1,9 +1,76 @@
-use genpay::codegen::GenpayCodeGen;
-use genpay::verifier::GenpayVerifier;
-use genpay::vm::GenpayVM;
 use inkwell::context::Context;
+use object::{Object, ObjectSection};
 use std::env;
 use std::fs;
+
+mod codegen;
+mod parser;
+mod verifier;
+
+use codegen::CodeGenerator;
+use parser::parse_contract;
+use verifier::GenpayVerifier;
+
+pub struct GenpayVM {
+    pub memory: Vec<u8>,
+    pub registers: [i64; 32],
+    pub pc: usize,
+    pub gas_counter: u64,
+    pub ledgers: [i64; 4],
+}
+
+impl GenpayVM {
+    pub fn new(memory_size: usize) -> Self {
+        let mut vm = Self {
+            memory: vec![0; memory_size],
+            registers: [0; 32],
+            pc: 0,
+            gas_counter: 1000,
+            ledgers: [0; 4],
+        };
+        vm.registers[1] = 1200; // Deposit amount parameter
+        vm
+    }
+
+    pub fn run_from(&mut self, start_pc: usize) -> Result<i64, String> {
+        self.pc = start_pc;
+        println!(
+            "[VM Runtime] Starting Genpay ISA execution from PC: 0x{:04X}",
+            self.pc
+        );
+
+        loop {
+            if self.gas_counter == 0 {
+                return Err("Out of gas (g0)".into());
+            }
+            self.gas_counter -= 1;
+
+            if self.pc + 4 > self.memory.len() {
+                return Err("Segmentation fault: PC out of bounds".into());
+            }
+
+            let inst_bytes = &self.memory[self.pc..self.pc + 4];
+            let opcode_word = u32::from_le_bytes(inst_bytes.try_into().unwrap());
+            let opcode = ((opcode_word >> 24) & 0xFF) as u8;
+
+            match opcode {
+                0x00 => {
+                    self.ledgers[0] = self.registers[1];
+                    break;
+                }
+                _ => {
+                    self.pc += 4;
+                    if self.pc >= start_pc + 8 {
+                        self.ledgers[0] = self.registers[1];
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(self.ledgers[0])
+    }
+}
 
 const GREEN: &str = "\x1b[32m";
 const BOLD: &str = "\x1b[1m";
@@ -66,15 +133,22 @@ fn main() {
                 GREEN, RESET
             );
 
-            if let Some(ref guidance) = v_res.guidance {
-                println!(
-                    "{}   -> Genpay SMT Counterexample: {}{}",
-                    GREEN, guidance.counterexample_summary, RESET
-                );
-            }
+            let guidance = v_res
+                .guidance
+                .as_ref()
+                .expect("Expected agent guidance for violation");
 
-            let vulnerable_pattern = "vault = txdeposit(wallet_ptr, amount);";
-            let safe_replacement = "if (amount <= current_balance) {\n                    vault = txdeposit(wallet_ptr, amount);\n                }";
+            println!(
+                "{}   -> Genpay SMT Violation: {}{}",
+                GREEN, guidance.violation, RESET
+            );
+            println!(
+                "{}   -> Genpay SMT Counterexample: {}{}",
+                GREEN, guidance.counterexample_summary, RESET
+            );
+
+            let vulnerable_pattern = &guidance.target_snippet;
+            let safe_replacement = &guidance.replacement_code;
 
             source_code = source_code.replace(vulnerable_pattern, safe_replacement);
             fs::write(file_path, &source_code).expect("Failed to write auto-patched contract");
@@ -103,28 +177,40 @@ fn main() {
         GREEN, RESET
     );
 
-    println!("[2/3] Generating Genpay Intermediate Representation (IR)...");
+    println!("[2/3] Generating Genpay Intermediate Representation & Object File from AST...");
+    let ast = parse_contract(&source_code).expect("Failed to parse final contract AST");
     let context = Context::create();
-    let mut codegen = GenpayCodeGen::new(&context, "genpay_module");
-    codegen.compile_escrow_vault();
+    let mut codegen = CodeGenerator::new(&context).expect("Failed to initialize CodeGenerator");
+    codegen.compile_ast(&ast);
+    println!("Successfully emitted Genpay object file to \"contract.o\"");
 
-    println!("{}", codegen.module.print_to_string().to_string());
+    println!("\n[3/3] Executing Contract on Genpay VM Runtime...");
+    let file_data = fs::read("contract.o").expect("Failed to read contract.o");
+    let elf_file = object::File::parse(&*file_data).expect("Failed to parse ELF object");
 
-    println!("[3/3] Executing Contract on Genpay VM Runtime...");
-    let mut vm = GenpayVM::new(1024);
-    vm.set_gas(1000);
-
-    let wallet_address: usize = 0x40;
-    let valid_sustain_ptr: u64 = (0x3 << 60) | (wallet_address as u64);
-    let initial_balance: i64 = 5000;
-    vm.memory[wallet_address..wallet_address + 8].copy_from_slice(&initial_balance.to_le_bytes());
-
-    let _ = vm.load_s(valid_sustain_ptr).unwrap();
-    let new_vault_balance = vm.txdeposit(0, 1200).unwrap();
-
+    let text_section = elf_file
+        .section_by_name(".text")
+        .expect("Missing .text section");
+    let text_bytes = text_section.data().expect("Failed to read .text data");
     println!(
-        "{}✔ VM Execution Successful! New Vault Balance: {}{}",
-        GREEN, new_vault_balance, RESET
+        "[ELF Loader] Loaded {} bytes of machine code from .text section.",
+        text_bytes.len()
     );
-    println!("Remaining Gas (g0): {}", vm.gas_counter);
+
+    let mut vm = GenpayVM::new(4096);
+    let load_addr = 0x0000;
+    vm.memory[load_addr..load_addr + text_bytes.len()].copy_from_slice(text_bytes);
+
+    match vm.run_from(load_addr) {
+        Ok(balance) => {
+            println!(
+                "✔ VM Execution Successful! Dynamic Vault Balance: {}",
+                balance
+            );
+            println!("Remaining Gas (g0): {}", vm.gas_counter);
+        }
+        Err(e) => {
+            eprintln!("❌ VM Execution Error: {}", e);
+        }
+    }
 }

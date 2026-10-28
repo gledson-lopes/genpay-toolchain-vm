@@ -1,30 +1,25 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
-COMMENT    = _{ "//" ~ (!("\n") ~ ANY)* }
 
-program       = _{ SOI ~ contract_def ~ EOI }
+contract = { "contract" ~ ident ~ "{" ~ fn_def* ~ "}" }
+fn_def = { "fn" ~ ident ~ "(" ~ parameters? ~ ")" ~ "->" ~ ident ~ "{" ~ block_item* ~ "}" }
+parameters = { param ~ ("," ~ param)* }
+param = { ident ~ ":" ~ type_spec }
+type_spec = { ("*" ~ ident)? ~ ident }
 
-contract_def  =  { "contract" ~ ident ~ "{" ~ fn_def ~ "}" }
-fn_def        =  { "fn" ~ ident ~ "(" ~ param_list? ~ ")" ~ "->" ~ ident ~ "{" ~ block_stmt* ~ "}" }
+block_item = { gas_block | ledger_decl | atomic_block | let_stmt | assign_stmt | return_stmt | if_stmt }
+gas_block = { "gas" ~ "(" ~ expr ~ ")" ~ "{" ~ block_item* ~ "}" }
+atomic_block = { "atomic" ~ "{" ~ block_item* ~ "}" }
+ledger_decl = { "ledger" ~ ident ~ ":" ~ ident ~ "=" ~ expr ~ ";" }
+let_stmt = { "let" ~ ident ~ "=" ~ expr ~ ";" }
+assign_stmt = { ident ~ "=" ~ expr ~ ";" }
+return_stmt = { "return" ~ expr ~ ";" }
+if_stmt = { "if" ~ "(" ~ condition_expr ~ ")" ~ "{" ~ block_item* ~ "}" }
 
-param_list    =  { param ~ ("," ~ param)* }
-param         =  { ident ~ ":" ~ type_modifier? ~ ident }
-type_modifier =  { "*sustain" }
+condition_expr = { ident ~ ("<=" | ">=" | "<" | ">" | "==" | "!=") ~ ident }
 
-block_stmt    = _{ gas_block | ledger_decl | atomic_block | assign_stmt | return_stmt | let_stmt }
+expr = { call_expr | number | ident }
+call_expr = { ident ~ ("." ~ ident)? ~ "(" ~ arguments? ~ ")" }
+arguments = { expr ~ ("," ~ expr)* }
 
-gas_block     =  { "gas" ~ "(" ~ expr ~ ")" ~ "{" ~ block_stmt* ~ "}" }
-atomic_block  =  { "atomic" ~ "{" ~ block_stmt* ~ "}" }
-ledger_decl   =  { "ledger" ~ ident ~ ":" ~ ident ~ "=" ~ ledger_id ~ ";" }
-
-let_stmt      =  { "let" ~ ident ~ "=" ~ expr_call ~ ";" }
-assign_stmt   =  { ident ~ "=" ~ expr_call ~ ";" }
-return_stmt   =  { "return" ~ ident ~ ";" }
-
-expr_call     = _{ load_expr | deposit_expr | ident | number }
-load_expr     =  { "load.s" ~ "(" ~ ident ~ ")" }
-deposit_expr  =  { "txdeposit" ~ "(" ~ ident ~ "," ~ ident ~ ")" }
-
-ledger_id     =  { "b" ~ ASCII_DIGIT }
-ident         =  { ASCII_ALPHA ~ ASCII_ALPHANUMERIC* }
-number        =  { ASCII_DIGIT+ }
-expr          =  { ASCII_ALPHANUMERIC+ }
+number = @{ ASCII_DIGIT+ }
+ident = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }

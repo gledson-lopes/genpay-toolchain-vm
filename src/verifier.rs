@@ -59,7 +59,6 @@ impl GenpayVerifier {
             SatResult::Sat => {
                 let model = solver.get_model().unwrap();
 
-                // Dynamically extract counterexample values from Z3 model
                 let dep_val = model
                     .eval(&deposit_amount, true)
                     .and_then(|v| v.as_u64())
@@ -74,7 +73,6 @@ impl GenpayVerifier {
                     dep_val, dep_val, init_val, init_val
                 );
 
-                // Print Ariadne diagnostic
                 Report::build(ReportKind::Error, file_name, faulty_span.start)
                     .with_code("GENPAY-SMT-001")
                     .with_message("Genpay Formal Verification Failed: Contract invariant violated.")
@@ -88,7 +86,6 @@ impl GenpayVerifier {
                     .print((file_name, Source::from(source_code)))
                     .unwrap();
 
-                // Dynamically synthesize the guidance based on verified symbolic variables
                 let violation = format!(
                     "Z3 model proved underflow: transfer amount ({}) exceeds initial wallet balance ({}).",
                     dep_val, init_val
