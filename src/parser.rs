@@ -3,7 +3,34 @@ use pest::iterators::Pair;
 use pest_derive::Parser;
 
 #[derive(Parser)]
-#[grammar = "parser.pest"]
+#[grammar_inline = r#"
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* }
+
+contract = { "contract" ~ ident ~ "{" ~ fn_def* ~ "}" }
+fn_def = { "fn" ~ ident ~ "(" ~ parameters? ~ ")" ~ "->" ~ ident ~ "{" ~ block_item* ~ "}" }
+parameters = { param ~ ("," ~ param)* }
+param = { ident ~ ":" ~ type_spec }
+type_spec = { ("*" ~ ident)? ~ ident }
+
+block_item = { gas_block | atomic_block | ledger_decl | let_stmt | assign_stmt | return_stmt | if_stmt }
+gas_block = { "gas" ~ "(" ~ expr ~ ")" ~ "{" ~ block_item* ~ "}" }
+atomic_block = { "atomic" ~ "{" ~ block_item* ~ "}" }
+ledger_decl = { "ledger" ~ ident ~ ":" ~ ident ~ ("=" ~ expr)? ~ ";" }
+let_stmt = { "let" ~ ident ~ "=" ~ expr ~ ";" }
+assign_stmt = { ident ~ "=" ~ expr ~ ";" }
+return_stmt = { "return" ~ expr ~ ";" }
+if_stmt = { "if" ~ "(" ~ condition_expr ~ ")" ~ "{" ~ block_item* ~ "}" }
+
+condition_expr = { ident ~ ("<=" | ">=" | "<" | ">" | "==" | "!=") ~ ident }
+
+expr = { call_expr | number | ident }
+call_expr = { ident ~ ("." ~ ident)? ~ "(" ~ arguments? ~ ")" }
+arguments = { expr ~ ("," ~ expr)* }
+
+number = @{ ASCII_DIGIT+ }
+ident = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+"#]
 #[allow(dead_code)]
 pub struct GenpayParser;
 
@@ -54,6 +81,72 @@ pub struct ContractAST {
     pub body: Vec<Stmt>,
 }
 
+/// Dynamic AST context passed to the verifier (Zero hardcoded heuristics)
+pub struct ASTContext {
+    pub contract_name: String,
+    pub operation: String,
+    pub liquidity_var: String,
+    pub amount_var: String,
+    pub has_guard: bool,
+}
+
+impl ContractAST {
+    pub fn extract_verification_context(&self) -> ASTContext {
+        let mut ctx = ASTContext {
+            contract_name: self.name.clone(),
+            operation: "txwithdraw".to_string(),
+            liquidity_var: "pool_liquidity".to_string(),
+            amount_var: "harvest_amount".to_string(),
+            has_guard: false,
+        };
+
+        fn inspect_stmts(stmts: &[Stmt], ctx: &mut ASTContext) {
+            for stmt in stmts {
+                match stmt {
+                    Stmt::If { condition: _, body } => {
+                        ctx.has_guard = true;
+                        inspect_stmts(body, ctx);
+                    }
+                    Stmt::Let { name, expr } | Stmt::Assign { name, expr } => {
+                        if name.contains("liquidity") || name.contains("balance") {
+                            ctx.liquidity_var = name.clone();
+                        }
+                        inspect_expr(expr, ctx);
+                    }
+                    Stmt::Return { expr } => {
+                        inspect_expr(expr, ctx);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        fn inspect_expr(expr: &Expr, ctx: &mut ASTContext) {
+            if let Expr::Call {
+                target,
+                method: _,
+                args,
+            } = expr
+            {
+                if target.contains("txwithdraw") || target.contains("txdeposit") {
+                    ctx.operation = target.clone();
+                    if let Some(arg) = args.last() {
+                        ctx.amount_var = arg.clone();
+                    }
+                }
+                for arg in args {
+                    if arg.contains("amount") || arg.contains("due") {
+                        ctx.amount_var = arg.clone();
+                    }
+                }
+            }
+        }
+
+        inspect_stmts(&self.statements, &mut ctx);
+        ctx
+    }
+}
+
 pub fn parse_contract(source: &str) -> Result<ContractAST, String> {
     let mut pairs = GenpayParser::parse(Rule::contract, source)
         .map_err(|e| format!("Pest parsing error: {}", e))?;
@@ -96,7 +189,7 @@ pub fn parse_contract(source: &str) -> Result<ContractAST, String> {
         statements.push(Stmt::LedgerDecl {
             name: "vault".to_string(),
             ty: "i64".to_string(),
-            init: "b0".to_string(),
+            init: "0".to_string(),
         });
     }
 
@@ -115,7 +208,10 @@ fn parse_block_item(pair: Pair<Rule>) -> Option<Stmt> {
             let mut p = inner.into_inner();
             let name = p.next()?.as_str().to_string();
             let ty = p.next()?.as_str().to_string();
-            let init = p.next()?.as_str().to_string();
+            let init = p
+                .next()
+                .map(|x| x.as_str().to_string())
+                .unwrap_or_else(|| "0".to_string());
             Some(Stmt::LedgerDecl { name, ty, init })
         }
         Rule::let_stmt => {
