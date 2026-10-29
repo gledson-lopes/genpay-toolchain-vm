@@ -1,0 +1,21 @@
+contract = { SOI ~ "contract" ~ identifier ~ "{" ~ function_decl* ~ "}" ~ EOI }
+function_decl = { "fn" ~ fn_name ~ "(" ~ param_list? ~ ")" ~ "->" ~ return_type ~ "{" ~ gas_block ~ "}" }
+fn_name = { identifier }
+param_list = { param ~ ("," ~ param)* }
+param = { identifier ~ ":" ~ type_spec }
+type_spec = { "*" ~ identifier ~ identifier | identifier }
+return_type = { identifier }
+gas_block = { "gas" ~ "(" ~ identifier ~ ")" ~ "{" ~ statement* ~ "}" }
+statement = { if_stmt | atomic_stmt | ledger_stmt | assignment_stmt | return_stmt | raw_stmt }
+ledger_stmt = { "ledger" ~ identifier ~ ":" ~ identifier ~ ";" }
+assignment_stmt = { identifier ~ "=" ~ expression ~ ";" }
+atomic_stmt = { "atomic" ~ "{" ~ statement* ~ "}" }
+if_stmt = { "if" ~ "(" ~ condition ~ ")" ~ "{" ~ statement* ~ "}" }
+return_stmt = { "return" ~ identifier ~ ";" }
+raw_stmt = { (!( "}" ) ~ ANY)+ }
+condition = { ANY+ }
+expression = { identifier ~ "(" ~ arg_list? ~ ")" | identifier ~ "." ~ identifier ~ "(" ~ arg_list? ~ ")" | identifier }
+arg_list = { identifier ~ ("," ~ identifier)* }
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* }

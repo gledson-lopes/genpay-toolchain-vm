@@ -1,0 +1,22 @@
+python3 -c '
+with open("contract.o", "rb") as f:
+    data = f.read()
+    print("Magic Header:", data[0:4])
+    print("Bytecode Stream (Hex):", data[4:].hex())
+    pc = 4
+    while pc < len(data):
+        opcode = data[pc]
+        if opcode == 0x01:
+            print(f"[{pc:04x}] OP_LOAD_S (0x01)")
+            pc += 1
+        elif opcode == 0x02:
+            val = int.from_bytes(data[pc+1:pc+5], "little")
+            print(f"[{pc:04x}] OP_TXWITHDRAW (0x02) -> Amount/Arg: {val}")
+            pc += 5
+        elif opcode == 0x04:
+            print(f"[{pc:04x}] OP_RETURN (0x04)")
+            pc += 1
+        else:
+            print(f"[{pc:04x}] Unknown Opcode: {opcode:#04x}")
+            pc += 1
+'

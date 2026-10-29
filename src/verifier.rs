@@ -7,6 +7,7 @@ use std::path::Path;
 use z3::ast::BV;
 use z3::{Config, Context, SatResult, Solver};
 
+#[allow(dead_code)]
 pub struct AgentGuidance {
     pub violation: String,
     pub target_snippet: String,
@@ -14,11 +15,13 @@ pub struct AgentGuidance {
     pub counterexample_summary: String,
 }
 
+#[allow(dead_code)]
 pub struct VerificationResult {
     pub is_valid: bool,
     pub guidance: Option<AgentGuidance>,
 }
 
+#[allow(dead_code)]
 struct LoRALinearInference {
     base_linear: Linear,
     lora_a: Tensor,
@@ -26,6 +29,7 @@ struct LoRALinearInference {
     scaling: f64,
 }
 
+#[allow(dead_code)]
 impl LoRALinearInference {
     pub fn load(
         in_dim: usize,
@@ -57,8 +61,10 @@ impl Module for LoRALinearInference {
     }
 }
 
+#[allow(dead_code)]
 pub struct GenpayVerifier;
 
+#[allow(dead_code)]
 impl GenpayVerifier {
     pub fn verify_ast(
         source_code: &str,
@@ -110,7 +116,18 @@ impl GenpayVerifier {
         let zero_64 = BV::from_u64(&ctx, 0, 64);
 
         let z3_liquidity = BV::new_const(&ctx, ast_ctx.liquidity_var.clone(), 64);
-        let z3_amount = BV::new_const(&ctx, ast_ctx.amount_var.clone(), 64);
+        let clean_amount_var = if ast_ctx.amount_var.contains(',') {
+            ast_ctx
+                .amount_var
+                .split(',')
+                .last()
+                .unwrap()
+                .trim()
+                .to_string()
+        } else {
+            ast_ctx.amount_var.clone()
+        };
+        let z3_amount = BV::new_const(&ctx, clean_amount_var.clone(), 64);
 
         solver.assert(&z3_liquidity.bvugt(&zero_64));
         solver.assert(&z3_amount.bvugt(&zero_64));
@@ -136,13 +153,13 @@ impl GenpayVerifier {
 
                 let counterexample_summary = format!(
                     "{} = {}, {} = {} (Dynamic SMT counterexample)",
-                    ast_ctx.liquidity_var, liq_val, ast_ctx.amount_var, amt_val
+                    ast_ctx.liquidity_var, liq_val, clean_amount_var, amt_val
                 );
 
                 // Find the exact line containing the target operation
                 let full_line = source_code
                     .lines()
-                    .find(|line| line.contains(&format!("{}(account_ptr", ast_ctx.operation)))
+                    .find(|line| line.contains(&ast_ctx.operation))
                     .unwrap_or("");
 
                 // Extract exact leading indentation
@@ -170,13 +187,13 @@ impl GenpayVerifier {
                         Label::new((file_name, faulty_span.clone()))
                             .with_message(format!(
                                 "Z3 proved `{}` ({}) exceeds `{}` ({}) without bounds check.",
-                                ast_ctx.amount_var, amt_val, ast_ctx.liquidity_var, liq_val
+                                clean_amount_var, amt_val, ast_ctx.liquidity_var, liq_val
                             ))
                             .with_color(Color::Red),
                     )
                     .with_note(format!(
                         "Enforce `if ({} <= {})` before executing `{}`.",
-                        ast_ctx.amount_var, ast_ctx.liquidity_var, ast_ctx.operation
+                        clean_amount_var, ast_ctx.liquidity_var, ast_ctx.operation
                     ))
                     .finish()
                     .print((file_name, Source::from(source_code)))
@@ -184,14 +201,14 @@ impl GenpayVerifier {
 
                 let violation = format!(
                     "Solvency Invariant Violation: {} ({}) exceeds {} ({}).",
-                    ast_ctx.amount_var, amt_val, ast_ctx.liquidity_var, liq_val
+                    clean_amount_var, amt_val, ast_ctx.liquidity_var, liq_val
                 );
 
-                // Build clean replacement code with proper relative indentation
+                // Build clean statement-level replacement block matching Pest if_stmt grammar
                 let replacement_code = format!(
                     "{}if ({} <= {}) {{\n{}    {}\n{}}}",
                     indent,
-                    ast_ctx.amount_var,
+                    clean_amount_var,
                     ast_ctx.liquidity_var,
                     indent,
                     full_line.trim(),
