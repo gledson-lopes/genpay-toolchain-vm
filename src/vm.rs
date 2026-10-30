@@ -89,7 +89,14 @@ impl GenpayVM {
                 }
                 0x04 => {
                     // OP_RETURN: Terminal or return opcode
-                    // Can optionally consume following expression bytes if emitted
+                    println!(
+                        "[VM Decoded Exec] return executed. Current pool state: {}",
+                        if !self.ledgers.is_empty() {
+                            self.ledgers[0]
+                        } else {
+                            0
+                        }
+                    );
                 }
                 0xFF => {
                     // Padding / Halt Byte
